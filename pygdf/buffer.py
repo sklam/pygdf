@@ -3,7 +3,7 @@ from __future__ import print_function, division
 import numpy as np
 
 from . import cudautils, utils
-
+from .serialize import serialize_gpu_data
 
 class Buffer(object):
     """A 1D gpu buffer.
@@ -24,7 +24,7 @@ class Buffer(object):
         self.dtype = self.mem.dtype
 
     def __reduce__(self):
-        cpumem = self.to_array()
+        cpumem = serialize_gpu_data(self.to_gpu_array())
         # Note: pickled Buffer only stores *size* element.
         return type(self), (cpumem,)
 
