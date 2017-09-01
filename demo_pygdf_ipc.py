@@ -1,31 +1,35 @@
 # coding: utf-8
 import os
-os.environ['PYGDF_USE_IPC'] = '1'
+# os.environ['PYGDF_USE_IPC'] = '1'
+from numba import cuda
+cuda.select_device(0)
 import dask_gdf as dgd
 from dask.distributed import Client
 import dask
 import pygdf
 import numpy as np
 
+
 def main():
-    df = pygdf.DataFrame()
-    nelem = 1000 #20 * 10**4
-    df['a'] = np.arange(nelem)
-    df['b'] = np.arange(nelem)
 
-    print(df)
+    client = Client('nvidia1:8786')
 
-    client = Client('0.0.0.0:8786')
     with client:
         dask.set_options(get=client.get)
 
+        df = pygdf.DataFrame()
+        nelem = 1 * 10**6
+        df['a'] = np.arange(nelem)
+        df['b'] = np.arange(nelem)
+
+        print(df.head())
+
         print('here')
-        gd = dgd.from_pygdf(df, npartitions=2)
+        gd = dgd.from_pygdf(df, npartitions=10)
         q1 = gd.query('a > 2')
-        out = q1.compute().to_pandas()
+        c = q1.a + q1.b
 
-        print(out.head())
-
+        print(c.mean().compute())
 
 
 if __name__ == '__main__':
