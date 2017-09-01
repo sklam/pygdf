@@ -8,6 +8,7 @@ from dask.distributed import Client
 import dask
 import pygdf
 import numpy as np
+import math
 
 
 def main():
@@ -18,7 +19,7 @@ def main():
         dask.set_options(get=client.get)
 
         df = pygdf.DataFrame()
-        nelem = 1 * 10**6
+        nelem = 5 * 10**6
         df['a'] = np.arange(nelem)
         df['b'] = np.arange(nelem)
 
@@ -27,9 +28,11 @@ def main():
         print('here')
         gd = dgd.from_pygdf(df, npartitions=10)
         q1 = gd.query('a > 2')
+        client.persist(q1)
         c = q1.a + q1.b
 
         print(c.mean().compute())
+        print(q1.compute().head().to_pandas())
 
 
 if __name__ == '__main__':

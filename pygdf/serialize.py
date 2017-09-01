@@ -41,7 +41,6 @@ def server_loop():
     with cuda.gpus[0]:
         while True:
             req = socket.recv()
-            logger.info("recv msg: %r", req)
             out = _handle_request(req)
             socket.send(out)
 
@@ -131,15 +130,7 @@ def rebuild_gpu_data(context, key, remoteinfo):
     if context != _get_context():
         out = _request_transfer(key, remoteinfo)
         return out
-        # hkey = tuple(ipchandle._ipc_handle.handle)
-        # if hkey in _cache:
-        #     return _cache[hkey]
-        # else:
-        #     data = ipchandle.open()
-        #     _keepalive.append(ipchandle)
-        #     _cache[hkey] = data
-        #     print('rebuild', _hash_ipc_handle(ipchandle), 'size:', data.size)
-        #     return data
+
     else:
         raise NotImplementedError('same process & cuda-context')
 
