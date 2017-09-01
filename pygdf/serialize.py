@@ -20,7 +20,6 @@ _global_port = [None]
 _global_addr = [None]
 
 
-
 def init_server():
     _global_addr[0] = socket.gethostname()
     logger.info("host addr: %s", _global_addr[0])
@@ -45,14 +44,8 @@ def server_loop():
             socket.send(out)
 
 
-_USE_IPC = bool(int(os.environ.get('PYGDF_USE_IPC', '1')))
-
-
 def serialize_gpu_data(gpudata):
-    if _USE_IPC:
-        return IpcGpuData(gpudata)
-    else:
-        return gpudata.copy_to_host()
+    return IpcGpuData(gpudata)
 
 
 def _get_context():
@@ -79,7 +72,6 @@ class IpcGpuData(object):
 
     def __reduce__(self):
         remoteinfo = _global_addr[0], _global_port[0]
-        # ipch = self._gpu_data.get_ipc_handle()
         key = _get_key(self._gpu_data)
         args = (self._context, key, remoteinfo)
         _out_cache[key] = self._gpu_data
