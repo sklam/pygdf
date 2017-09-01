@@ -9,19 +9,24 @@ import numpy as np
 
 def main():
     df = pygdf.DataFrame()
-    nelem = 20 * 10**4
+    nelem = 1000 #20 * 10**4
     df['a'] = np.arange(nelem)
     df['b'] = np.arange(nelem)
-    df.head().to_pandas()
+
+    print(df)
+
     client = Client('0.0.0.0:8786')
-    dask.set_options(get=client.get)
+    with client:
+        dask.set_options(get=client.get)
+
+        print('here')
+        gd = dgd.from_pygdf(df, npartitions=2)
+        q1 = gd.query('a > 2')
+        out = q1.compute().to_pandas()
+
+        print(out.head())
 
 
-    gd = dgd.from_pygdf(df, npartitions=2)
-    q1 = gd.query('a > 2')
-    out = q1.compute().to_pandas()
-
-    print(out)
 
 if __name__ == '__main__':
     main()

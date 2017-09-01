@@ -1,10 +1,15 @@
 import os
 import multiprocessing
 
+
 from numba import cuda
+
+from distributed import worker_client, get_client, get_worker
+from distributed.client import _get_global_client, _global_client
 
 
 _USE_IPC = bool(int(os.environ.get('PYGDF_USE_IPC', '0')))
+
 
 
 def serialize_gpu_data(gpudata):
@@ -17,10 +22,14 @@ def serialize_gpu_data(gpudata):
 def _get_context():
     pid = multiprocessing.current_process().pid
     ctxid = cuda.current_context().handle.value
-    return pid, ctxid, str(cuda.get_current_device())
+    return pid, ctxid
 
 
 _keepalive = []
+
+
+def _hash_ipc_handle(ipchandle):
+    return hex(hash(tuple(ipchandle._ipc_handle.handle)))
 
 
 class IpcGpuData(object):
@@ -30,9 +39,8 @@ class IpcGpuData(object):
 
     def __reduce__(self):
         args = (self._context, self._gpu_data.get_ipc_handle())
-        ipchandle = args[1]
-        _keepalive.append((self._gpu_data, args), 'hash', hash(tuple(ipchandle._ipc_handle.handle)))
-        print("serializing", self._context)
+        _keepalive.append((self._gpu_data, args))
+        print('serializing', _hash_ipc_handle(args[1]), 'size:', self._gpu_data.size)
         return rebuild_gpu_data, args
 
 
@@ -40,16 +48,28 @@ _cache = {}
 
 
 def rebuild_gpu_data(context, ipchandle):
+    ####
+    try:
+        print("worker?", get_worker())
+    except ValueError as e:
+        print(e)
+        print("try client")
+        # cl = _global_client[0]
+        # print(cl.run(os.getpid))
+    else:
+        with worker_client() as e:
+            print(e.run(os.getpid))
+
+    ####
     if context != _get_context():
         hkey = tuple(ipchandle._ipc_handle.handle)
         if hkey in _cache:
             return _cache[hkey]
         else:
-            hashd = hash(tuple(ipchandle._ipc_handle.handle))
-            print('rebuild', hashd, 'from', context, 'here', _get_context())
             data = ipchandle.open()
             _keepalive.append(ipchandle)
             _cache[hkey] = data
+            print('rebuild', _hash_ipc_handle(ipchandle), 'size:', data.size)
             return data
     else:
         raise NotImplementedError('same context')
