@@ -424,7 +424,7 @@ def test_dataframe_take(ntake):
     check(ignore_index=True)
 
 
-def test_dataframe_append_empty():
+def test_dataframe_append_scalar():
     # Test issue 110
     pdf = pd.DataFrame({
         "key": [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
