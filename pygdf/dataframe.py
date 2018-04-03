@@ -331,10 +331,7 @@ class DataFrame(object):
         The prepared Series object.
         """
         empty_index = isinstance(self._index, EmptyIndex)
-        if isinstance(col, Series) or empty_index:
-            series = Series(col)
-        else:
-            series = Series(col, index=self.index)
+        series = Series(col)
         if forceindex or empty_index or self._index == series.index:
             if empty_index:
                 self._index = series.index
@@ -356,7 +353,7 @@ class DataFrame(object):
         if name in self._cols:
             raise NameError('duplicated column name {!r}'.format(name))
 
-        series = self._prepare_series_for_add(data, forceindex=True)
+        series = self._prepare_series_for_add(data, forceindex=forceindex)
         self._cols[name] = series
 
     def drop_column(self, name):
