@@ -1,3 +1,4 @@
+import sys
 try:
     import distributed
 except ImportError:
@@ -35,9 +36,14 @@ else:
             raise
 
     def _deserialize(header, frames):
-        reconstructor = _dp.deserialize(*header['reconstructor'])
-        assert reconstructor is not None, 'None {}'.format(header['type'])
-        return reconstructor(_dp.deserialize, header, frames)
+        try:
+            reconstructor = _dp.deserialize(*header['reconstructor'])
+            assert reconstructor is not None, 'None {}'.format(header['type'])
+            return reconstructor(_dp.deserialize, header, frames)
+        except:
+            import traceback
+            traceback.print_exc()
+            raise
 
 
 def _parse_transfer_context(context):
@@ -57,6 +63,8 @@ def _parse_transfer_context(context):
 
 
 def should_use_ipc(context):
+    if not sys.platform.startswith('linux'):
+        return False
     if context is None:
         return False
     same_node, same_process = _parse_transfer_context(context)

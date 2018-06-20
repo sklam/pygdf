@@ -243,10 +243,10 @@ class DataFrame(object):
                                  more_rows=more_rows)
 
     def __str__(self):
-        return self.to_string()
+        return self.to_string(nrows=10)
 
     def __repr__(self):
-        return self.to_string()
+        return self.to_string(nrows=3, ncols=8)
 
     @property
     def loc(self):
@@ -613,7 +613,7 @@ class DataFrame(object):
 
         Returns
         -------
-        joined : DataFrame
+        joined : DataFrame
 
         Notes
         -----
