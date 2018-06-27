@@ -1,3 +1,4 @@
+import os
 import sys
 try:
     import distributed
@@ -62,7 +63,12 @@ def _parse_transfer_context(context):
     return same_node, same_process
 
 
+_CONFIG_USE_IPC = bool(int(os.environ.get("DASK_GDF_USE_IPC", "1")))
+
+
 def should_use_ipc(context):
+    if not _CONFIG_USE_IPC:
+        return False
     if not sys.platform.startswith('linux'):
         return False
     if context is None:

@@ -40,7 +40,7 @@ class Buffer(object):
         from .serialize import should_use_ipc
 
         use_ipc = should_use_ipc(context)
-        print("use_ipc {}".format(use_ipc))
+        print('use_ipc', use_ipc)
         header = {}
         if use_ipc:
             if self._cached_ipch is not None:
