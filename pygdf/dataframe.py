@@ -604,8 +604,35 @@ class DataFrame(object):
             raise ValueError('there are overlapping columns but '
                              'lsuffix and rsuffix are not defined')
 
+        def fix_name(name, suffix):
+            if name in same_names:
+                return "{}{}".format(name, suffix)
+            return name
+
         lhs = self
         rhs = other
+
+        # Handle empty RHS
+        if len(rhs) == 0:
+            df = DataFrame()
+            for k in on:
+                df[k] = lhs[k]
+
+            leftcols = [x for x in lhs.columns if x not in on]
+            for k in leftcols:
+                df[fix_name(k, lsuffix)] = lhs[k]
+
+            rightcols = [x for x in rhs.columns if x not in on]
+            for k in rightcols:
+                size = len(df)
+                data = cudautils.zeros(len(df), rhs[k].dtype)
+                size = utils.calc_chunk_size(size, utils.mask_bitsize)
+                mask = cudautils.zeros(size, dtype=utils.mask_dtype)
+                val = Series.from_masked_array(data, mask, null_count=size)
+
+                df[fix_name(k, rsuffix)] = val.set_index(df.index)
+            return df
+
         # XXX: Replace this stub
         #joined_values, joined_indicies = self._stub_merge(
         #    lhs, rhs, left_on=on, right_on=on, how=how, return_joined_indicies=True
@@ -616,10 +643,6 @@ class DataFrame(object):
 
         # XXX: Prepare output.  same as _join.  code duplication
         # Perform left, inner and outer join
-        def fix_name(name, suffix):
-            if name in same_names:
-                return "{}{}".format(name, suffix)
-            return name
 
         def gather_cols(outdf, indf, on, idx, joinidx, suffix):
             mask = (Series(idx) != -1).as_mask()
