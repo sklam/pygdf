@@ -594,10 +594,11 @@ class DataFrame(object):
                 df[k] = self[k].reset_index().take(new_positions)
         return df.set_index(self.index.take(new_positions))
 
-    def merge(self, other, on=None, how='multi-left', lsuffix='_x', rsuffix='_y'):
-        if how != 'multi-left':
+    def merge(self, other, on=None, how='left', lsuffix='_x', rsuffix='_y'):
+        if how != 'left':
             raise ValueError('{!r} join not implemented yet'.format(how))
 
+        how = 'multi-left'
         same_names = set(self.columns) & set(other.columns)
         if same_names and not (lsuffix or rsuffix):
             raise ValueError('there are overlapping columns but '

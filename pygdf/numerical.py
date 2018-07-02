@@ -212,12 +212,12 @@ class NumericalColumn(columnops.TypedColumnBase):
             # Get list of columns from self with left_on and from other with right_on
             return self._hashjoin(other=other, left_on=left_on, right_on=right_on, how=how, return_indexers=return_indexers)
         else:
-            raise ValueError('Unsupported join type') 
+            raise ValueError('Unsupported join type')
 
     def _hashjoin(self, other, how='left', return_indexers=False):
+        raise
+        return
 
-        return 
-        
 
     def _sortjoin(self, other, how='left', return_indexers=False):
         """Join with another column.
