@@ -184,9 +184,10 @@ def _as_numba_devarray(intaddr, nelem, dtype, cb_dtor=None):
     finalizer = (None
                  if cb_dtor is None
                  else _make_mem_finalizer(cb_dtor, datasize))
-    memptr = cuda.driver.MemoryPointer(context=cuda.current_context(),
+    ctx = cuda.current_context()
+    memptr = cuda.driver.MemoryPointer(context=ctx,
                                        pointer=addr, size=datasize,
-                                       finalizer=finalizer)
+                                       finalizer=finalizer(ctx, addr))
     return cuda.devicearray.DeviceNDArray(shape=(nelem,), strides=(elemsize,),
                                           dtype=dtype, gpu_data=memptr)
 
