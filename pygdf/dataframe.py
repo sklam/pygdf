@@ -11,13 +11,13 @@ import pandas as pd
 from numba import cuda
 from numba.cuda.cudadrv.devicearray import DeviceNDArray
 
-from . import _gdf, cudautils, formatting, queryutils, applyutils, utils
+from . import cudautils, formatting, queryutils, applyutils, utils, _gdf
 from .index import GenericIndex, EmptyIndex, Index, RangeIndex
+from .buffer import Buffer
 from .series import Series
 from .column import Column
 from .settings import NOTSET, settings
 from .serialize import register_distributed_serializer
-from .buffer import Buffer
 
 
 class DataFrame(object):
@@ -146,6 +146,9 @@ class DataFrame(object):
         If *arg* is a ``str``, return the column Series.
         If *arg* is a ``slice``, return a new DataFrame with all columns
         sliced to the specified range.
+        If *arg* is an ``array`` containing column names, return a new
+        DataFrame with the corresponding columns.
+
 
         Examples
         --------
@@ -165,13 +168,24 @@ class DataFrame(object):
         17   17   17   17
         18   18   18   18
         19   19   19   19
+        >>>df[['a','c']] # get columns a and c
+             a    c
+        0    0    0
+        1    1    1
+        2    2    2
+        3    3    3
         """
-        if isinstance(arg, str):
+        if isinstance(arg, str) or isinstance(arg, int):
             return self._cols[arg]
         elif isinstance(arg, slice):
             df = DataFrame()
             for k, col in self._cols.items():
                 df[k] = col[arg]
+            return df
+        elif isinstance(arg, (list,)):
+            df = DataFrame()
+            for col in arg:
+                df[col] = self[col]
             return df
         else:
             msg = "__getitem__ on type {!r} is not supported"
@@ -245,10 +259,15 @@ class DataFrame(object):
                                  more_rows=more_rows)
 
     def __str__(self):
-        return self.to_string()
+        nrows = settings.formatting.get('nrows') or 10
+        ncols = settings.formatting.get('ncols') or 8
+        return self.to_string(nrows=nrows, ncols=ncols)
 
     def __repr__(self):
-        return self.to_string()
+        return "<pygdf.DataFrame ncols={} nrows={} >".format(
+            len(self.columns),
+            len(self),
+            )
 
     @property
     def loc(self):
@@ -288,10 +307,10 @@ class DataFrame(object):
 
         Parameters
         ----------
-        index : Index, Series-convertible or str
-            Index: the new index.
-            Series-convertible: values for the new index.
-            str: name of column to be used as series
+        index : Index, Series-convertible, or str
+            Index : the new index.
+            Series-convertible : values for the new index.
+            str : name of column to be used as series
         """
         # When index is a column name
         if isinstance(index, str):
@@ -423,14 +442,17 @@ class DataFrame(object):
         out._index = index
         return out
 
-    def as_gpu_matrix(self, columns=None):
+    def as_gpu_matrix(self, columns=None, order='F'):
         """Convert to a matrix in device memory.
 
         Parameters
         ----------
-        columns: sequence of str
+        columns : sequence of str
             List of a column names to be extracted.  The order is preserved.
             If None is specified, all columns are used.
+        order : 'F' or 'C'
+            Optional argument to determine whether to return a column major
+            (Fortran) matrix or a row major (C) matrix.
 
         Returns
         -------
@@ -448,18 +470,25 @@ class DataFrame(object):
             raise ValueError("require at least 1 row")
         dtype = cols[0].dtype
         if any(dtype != c.dtype for c in cols):
-            raise ValueError('all column must have the same dtype')
+            raise ValueError('all columns must have the same dtype')
         for k, c in self._cols.items():
             if c.has_null_mask:
                 errmsg = ("column {!r} has null values"
                           "hint: use .fillna() to replace null values")
                 raise ValueError(errmsg.format(k))
 
-        matrix = cuda.device_array(shape=(nrow, ncol), dtype=dtype, order="F")
-        for colidx, inpcol in enumerate(cols):
-            dense = inpcol.to_gpu_array(fillna='pandas')
-            matrix[:, colidx].copy_to_device(dense)
-
+        if order == 'F':
+            matrix = cuda.device_array(shape=(nrow, ncol), dtype=dtype,
+                                       order=order)
+            for colidx, inpcol in enumerate(cols):
+                dense = inpcol.to_gpu_array(fillna='pandas')
+                matrix[:, colidx].copy_to_device(dense)
+        elif order == 'C':
+            matrix = cudautils.row_matrix(cols, nrow, ncol, dtype)
+        else:
+            errmsg = ("order parameter should be 'C' for row major or 'F' for"
+                      "column major GPU matrix")
+            raise ValueError(errmsg.format(k))
         return matrix
 
     def as_matrix(self, columns=None):
@@ -467,7 +496,7 @@ class DataFrame(object):
 
         Parameters
         ----------
-        columns: sequence of str
+        columns : sequence of str
             List of a column names to be extracted.  The order is preserved.
             If None is specified, all columns are used.
 
@@ -705,11 +734,11 @@ class DataFrame(object):
                     # 'multi_gather_joined_index' that can gather a value from
                     # each column at once
                     raw_values = cudautils.gather_joined_index(
-                                left_cols[i].to_gpu_array(),
-                                right_cols[i].to_gpu_array(),
-                                left_indices,
-                                right_indices,
-                                )
+                        left_cols[i].to_gpu_array(),
+                        right_cols[i].to_gpu_array(),
+                        left_indices,
+                        right_indices,
+                    )
                     buffered_values = Buffer(raw_values)
 
                     joined_values.append(left_cols[i]
@@ -724,7 +753,7 @@ class DataFrame(object):
             return joined_indices
 
     def join(self, other, on=None, how='left', lsuffix='', rsuffix='',
-             sort=False):
+             sort=False, method='hash'):
         """Join columns with other DataFrame on index or on a key column.
 
         Parameters
@@ -740,7 +769,7 @@ class DataFrame(object):
 
         Returns
         -------
-        joined : DataFrame
+        joined : DataFrame
 
         Notes
         -----
@@ -761,10 +790,11 @@ class DataFrame(object):
                              'lsuffix and rsuffix are not defined')
 
         return self._join(other=other, how=how, lsuffix=lsuffix,
-                          rsuffix=rsuffix, sort=sort, same_names=same_names)
+                          rsuffix=rsuffix, sort=sort, same_names=same_names,
+                          method=method)
 
     def _join(self, other, how, lsuffix, rsuffix, sort, same_names,
-              rightjoin=False):
+              method='hash', rightjoin=False):
         if how == 'right':
             # libgdf doesn't support right join directly, we will swap the
             # dfs and use left join
@@ -794,7 +824,8 @@ class DataFrame(object):
         df = DataFrame()
 
         joined_index, indexers = lhs.index.join(rhs.index, how=how,
-                                                return_indexers=True)
+                                                return_indexers=True,
+                                                method=method)
         gather_fn = (gather_cols if len(joined_index) else gather_empty)
         lidx = indexers[0].to_gpu_array()
         ridx = indexers[1].to_gpu_array()
@@ -813,7 +844,7 @@ class DataFrame(object):
             return df.sort_index()
         return df
 
-    def groupby(self, by, sort=False, as_index=False):
+    def groupby(self, by, sort=False, as_index=False, method="sort"):
         """Groupby
 
         Parameters
@@ -823,10 +854,14 @@ class DataFrame(object):
         sort : bool
             Force sorting group keys.
             Depends on the underlying algorithm.
-            Current algorithm always sort.
         as_index : bool; defaults to False
             Must be False.  Provided to be API compatible with pandas.
             The keys are always left as regular columns in the result.
+        method : str, optional
+            A string indicating the method to use to perform the group by.
+            Valid values are "sort", "hash", or "pygdf".
+            "pygdf" method may be deprecated in the future, but is currently
+            the only method supporting group UDFs via the `apply` function.
 
         Returns
         -------
@@ -841,15 +876,24 @@ class DataFrame(object):
         Only a minimal number of operations is implemented so far.
 
         - Only *by* argument is supported.
-        - The output is always sorted according to the *by* columns.
         - Since we don't support multiindex, the *by* columns are stored
           as regular columns.
         """
-        from .groupby import Groupby
-        if as_index:
-            msg = "as_index==True not supported due to the lack of multi-index"
-            raise NotImplementedError(msg)
-        return Groupby(self, by=by)
+        if (method == "pygdf"):
+            from .groupby import Groupby
+            if as_index:
+                msg = "as_index==True not supported due to the lack of\
+                    multi-index"
+                raise NotImplementedError(msg)
+            return Groupby(self, by=by)
+        else:
+            from .libgdf_groupby import LibGdfGroupby
+
+            if as_index:
+                msg = "as_index==True not supported due to the lack of\
+                    multi-index"
+                raise NotImplementedError(msg)
+            return LibGdfGroupby(self, by=by, method=method)
 
     def query(self, expr):
         """Query with a boolean expression using Numba to compile a GPU kernel.
@@ -976,6 +1020,23 @@ class DataFrame(object):
             raise ValueError('*chunks* must be defined')
         return applyutils.apply_chunks(self, func, incols, outcols, kwargs,
                                        chunks=chunks, tpb=tpb)
+
+    def hash_columns(self, columns=None):
+        """Hash the given *columns* and return a new Series
+
+        Parameters
+        ----------
+        column : sequence of str; optional
+            Sequence of column names. If columns is *None* (unspecified),
+            all columns in the frame are used.
+        """
+        from . import numerical
+
+        if columns is None:
+            columns = self.columns
+
+        cols = [self[k]._column for k in columns]
+        return Series(numerical.column_hash_values(*cols))
 
     def to_pandas(self):
         """Convert to a Pandas DataFrame.

@@ -1,6 +1,5 @@
 # Copyright (c) 2018, NVIDIA CORPORATION.
 
-from __future__ import print_function, division
 
 import warnings
 from collections import OrderedDict
@@ -13,6 +12,7 @@ from .buffer import Buffer
 from .index import Index, RangeIndex, GenericIndex
 from .settings import NOTSET, settings
 from .column import Column
+from .datetime import DatetimeColumn
 from . import columnops
 from .serialize import register_distributed_serializer
 
@@ -82,6 +82,14 @@ class Series(object):
         frames.extend(column_frames)
         header['column_frame_count'] = len(column_frames)
         return header, frames
+
+    @property
+    def dt(self):
+        if isinstance(self._column, DatetimeColumn):
+            return DatetimeProperties(self)
+        else:
+            raise AttributeError("Can only use .dt accessor with datetimelike "
+                                 "values")
 
     @classmethod
     def deserialize(cls, deserialize, header, frames):
@@ -246,10 +254,10 @@ class Series(object):
                                  cols=cols, more_rows=more_rows)
 
     def __str__(self):
-        return self.to_string()
+        return self.to_string(nrows=10)
 
     def __repr__(self):
-        return self.to_string()
+        return "<pygdf.Series nrows={} >".format(len(self))
 
     def _binaryop(self, other, fn):
         """
@@ -259,6 +267,16 @@ class Series(object):
         """
         other = self._normalize_binop_value(other)
         outcol = self._column.binary_operator(fn, other._column)
+        return self._copy_construct(data=outcol)
+
+    def _rbinaryop(self, other, fn):
+        """
+        Internal util to call a binary operator *fn* on operands *self*
+        and *other* for reflected operations.  Return the output Series.
+        The output dtype is determined by the input operands.
+        """
+        other = self._normalize_binop_value(other)
+        outcol = other._column.binary_operator(fn, self._column)
         return self._copy_construct(data=outcol)
 
     def _unaryop(self, fn):
@@ -273,17 +291,32 @@ class Series(object):
     def __add__(self, other):
         return self._binaryop(other, 'add')
 
+    def __radd__(self, other):
+        return self._rbinaryop(other, 'add')
+
     def __sub__(self, other):
         return self._binaryop(other, 'sub')
+
+    def __rsub__(self, other):
+        return self._rbinaryop(other, 'sub')
 
     def __mul__(self, other):
         return self._binaryop(other, 'mul')
 
+    def __rmul__(self, other):
+        return self._rbinaryop(other, 'mul')
+
     def __floordiv__(self, other):
         return self._binaryop(other, 'floordiv')
 
+    def __rfloordiv__(self, other):
+        return self._rbinaryop(other, 'floordiv')
+
     def __truediv__(self, other):
         return self._binaryop(other, 'truediv')
+
+    def __rtruediv__(self, other):
+        return self._rbinaryop(other, 'truediv')
 
     __div__ = __truediv__
 
@@ -702,40 +735,45 @@ class Series(object):
         warnings.warn("Use .unique() instead", DeprecationWarning)
         return self.unique()
 
-    def unique(self, type='sort'):
+    def unique(self, method='sort', sort=True):
         """Returns unique values of this Series.
         default='sort' will be changed to 'hash' when implemented.
         """
-        if type is not 'sort':
+        if method is not 'sort':
             msg = 'non sort based unique() not implemented yet'
+            raise NotImplementedError(msg)
+        if not sort:
+            msg = 'not sorted unique not implemented yet.'
             raise NotImplementedError(msg)
         if self.null_count == len(self):
             return np.empty(0, dtype=self.dtype)
-        res = self._column.unique(type=type)
+        res = self._column.unique(method=method)
         return Series(res)
 
-    def unique_count(self, type='sort'):
+    def unique_count(self, method='sort'):
         """Returns the number of unique valies of the Series: approximate version,
         and exact version to be moved to libgdf
         """
-        if type is not 'sort':
+        if method is not 'sort':
             msg = 'non sort based unique_count() not implemented yet'
             raise NotImplementedError(msg)
         if self.null_count == len(self):
             return 0
-        return self._column.unique_count(type=type)
+        return self._column.unique_count(method=method)
         # return len(self._column.unique())
 
-    def value_counts(self, type='sort'):
+    def value_counts(self, method='sort', sort=True):
         """Returns unique values of this Series.
         """
-        if type is not 'sort':
+        if method is not 'sort':
             msg = 'non sort based value_count() not implemented yet'
             raise NotImplementedError(msg)
         if self.null_count == len(self):
             return 0
-        vals, cnts = self._column.value_counts(type=type)
+        vals, cnts = self._column.value_counts(method=method)
         res = Series(cnts, index=GenericIndex(vals))
+        if sort:
+            return res.sort_values(ascending=False)
         return res
 
     def scale(self):
@@ -768,5 +806,48 @@ class Series(object):
         """
         return self._unaryop('floor')
 
+    # Misc
+
+    def hash_values(self):
+        """Compute the hash of values in this column.
+        """
+        from . import numerical
+
+        return Series(numerical.column_hash_values(self._column))
+
 
 register_distributed_serializer(Series)
+
+
+class DatetimeProperties(object):
+
+    def __init__(self, series):
+        self.series = series
+
+    @property
+    def year(self):
+        return self.get_dt_field('year')
+
+    @property
+    def month(self):
+        return self.get_dt_field('month')
+
+    @property
+    def day(self):
+        return self.get_dt_field('day')
+
+    @property
+    def hour(self):
+        return self.get_dt_field('hour')
+
+    @property
+    def minute(self):
+        return self.get_dt_field('minute')
+
+    @property
+    def second(self):
+        return self.get_dt_field('second')
+
+    def get_dt_field(self, field):
+        out_column = self.series._column.get_dt_field(field)
+        return Series(data=out_column, index=self.series._index)

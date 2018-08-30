@@ -1,3 +1,5 @@
+# Copyright (c) 2018, NVIDIA CORPORATION.
+
 import pandas as pd
 import numpy as np
 
@@ -155,6 +157,45 @@ class CategoricalColumn(columnops.TypedColumnBase):
                                          ordered=self._ordered)
         return pd.Series(data, index=index)
 
+    def _unique_segments(self):
+        """ Common code for unique, unique_count and value_counts"""
+        # make dense column
+        densecol = self.replace(data=self.to_dense_buffer(), mask=None)
+        # sort the column
+        sortcol, _ = densecol.sort_by_values(ascending=True)
+        # find segments
+        sortedvals = sortcol.to_gpu_array()
+        segs, begins = cudautils.find_segments(sortedvals)
+        return segs, sortedvals
+
+    def unique(self, method=None):
+        return CategoricalColumn(
+            data=Buffer(list(range(0, len(self._categories))),
+                        categorical=True),
+            categories=self._categories,
+            ordered=self._ordered,
+            dtype=self.dtype)
+
+    def unique_count(self, method='sort'):
+        if method is not 'sort':
+            msg = 'non sort based unique_count() not implemented yet'
+            raise NotImplementedError(msg)
+        segs, _ = self._unique_segments()
+        return len(segs)
+
+    def value_counts(self, method='sort'):
+        if method is not 'sort':
+            msg = 'non sort based value_count() not implemented yet'
+            raise NotImplementedError(msg)
+        segs, sortedvals = self._unique_segments()
+        # Return both values and their counts
+        out1 = cudautils.gather(data=sortedvals, index=segs)
+        out2 = cudautils.value_count(segs, len(sortedvals))
+        out_vals = self.replace(data=Buffer(out1), mask=None)
+        out_counts = numerical.NumericalColumn(data=Buffer(out2),
+                                               dtype=np.intp)
+        return out_vals, out_counts
+
     def _encode(self, value):
         for i, cat in enumerate(self._categories):
             if cat == value:
@@ -169,7 +210,8 @@ class CategoricalColumn(columnops.TypedColumnBase):
     def default_na_value(self):
         return -1
 
-    def join(self, other, how='left', return_indexers=False):
+    def join(self, other, how='left', return_indexers=False,
+             method='hash'):
         if not isinstance(other, CategoricalColumn):
             raise TypeError('*other* is not a categorical column')
         if self._ordered != other._ordered or self._ordered:
@@ -196,7 +238,8 @@ class CategoricalColumn(columnops.TypedColumnBase):
         # Do join as numeric column
         join_result = self.as_numerical.join(
             other.as_numerical, how=how,
-            return_indexers=return_indexers)
+            return_indexers=return_indexers,
+            method=method)
 
         if return_indexers:
             joined_index, indexers = join_result

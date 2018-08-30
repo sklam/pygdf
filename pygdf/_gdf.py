@@ -1,3 +1,5 @@
+# Copyright (c) 2018, NVIDIA CORPORATION.
+
 """
 This file provide binding to the libgdf library.
 """
@@ -98,16 +100,7 @@ _np2gdf_dtype = {
     np.int16:   libgdf.GDF_INT16,
     np.int8:    libgdf.GDF_INT8,
     np.bool_:   libgdf.GDF_INT8,
-}
-
-_np2gdf_dtype = {
-    np.float64: libgdf.GDF_FLOAT64,
-    np.float32: libgdf.GDF_FLOAT32,
-    np.int64:   libgdf.GDF_INT64,
-    np.int32:   libgdf.GDF_INT32,
-    np.int16:   libgdf.GDF_INT16,
-    np.int8:    libgdf.GDF_INT8,
-    np.bool_:   libgdf.GDF_INT8,
+    np.datetime64: libgdf.GDF_DATE64,
 }
 
 
@@ -155,10 +148,14 @@ def apply_sort(col_keys, col_vals, ascending=True):
 
 
 _join_how_api = {
-    'inner': libgdf.gdf_inner_join_generic,
+    'inner': libgdf.gdf_inner_join,
     'outer': libgdf.gdf_outer_join_generic,
-    'left': libgdf.gdf_multi_left_join_generic,
-    'left-compat': libgdf.gdf_left_join_generic,
+    'left': libgdf.gdf_left_join,
+}
+
+_join_method_api = {
+    'sort': libgdf.GDF_SORT,
+    'hash': libgdf.GDF_HASH
 }
 
 
@@ -200,7 +197,7 @@ def wrap_libgdf_pointer(intaddr, nelem, dtype, refct=True):
 
 
 @contextlib.contextmanager
-def apply_join(col_lhs, col_rhs, how):
+def apply_join(col_lhs, col_rhs, how, method='hash'):
     """Returns a tuple of the left and right joined indices as gpu arrays.
     """
     if(len(col_lhs) != len(col_rhs)):
@@ -208,9 +205,21 @@ def apply_join(col_lhs, col_rhs, how):
         raise ValueError(msg)
 
     joiner = _join_how_api[how]
-    join_result_ptr = ffi.new("gdf_join_result_type**", None)
+    method_api = _join_method_api[method]
+    gdf_context = ffi.new('gdf_context*')
 
-    if(how == 'left'):
+    if method == 'hash':
+        libgdf.gdf_context_view(gdf_context, 0, method_api, 0)
+    elif method == 'sort':
+        libgdf.gdf_context_view(gdf_context, 1, method_api, 0)
+    else:
+        msg = "method not supported"
+        raise ValueError(msg)
+
+    col_result_l = columnview(0, None, dtype=np.int32)
+    col_result_r = columnview(0, None, dtype=np.int32)
+
+    if(how in ['left', 'inner']):
         list_lhs = []
         list_rhs = []
         for i in range(len(col_lhs)):
@@ -218,19 +227,29 @@ def apply_join(col_lhs, col_rhs, how):
             list_rhs.append(col_rhs[i].cffi_view)
 
         # Call libgdf
-        joiner(len(col_lhs), list_lhs, list_rhs, join_result_ptr)
+
+        joiner(len(col_lhs), list_lhs, list_rhs, col_result_l,
+               col_result_r, gdf_context)
     else:
-        joiner(col_lhs[0].cffi_view, col_rhs[0].cffi_view, join_result_ptr)
+        joiner(col_lhs[0].cffi_view, col_rhs[0].cffi_view, col_result_l,
+               col_result_r)
 
     # Extract result
-    join_result = join_result_ptr[0]
-    dataptr = libgdf.gdf_join_result_data(join_result)
-    datasize = libgdf.gdf_join_result_size(join_result)
-    ary = _as_numba_devarray(intaddr=int(ffi.cast("uintptr_t", dataptr)),
-                             nelem=datasize, dtype=np.int32)
-    ary = ary.reshape(2, datasize // 2)
-    yield ((ary[0], ary[1]) if datasize > 0 else (ary, ary))
-    libgdf.gdf_join_result_free(join_result)
+
+    # yield ((ary[0], ary[1]) if datasize > 0 else (ary, ary))
+
+    left = _as_numba_devarray(intaddr=int(ffi.cast("uintptr_t",
+                                                   col_result_l.data)),
+                              nelem=col_result_l.size, dtype=np.int32)
+
+    right = _as_numba_devarray(intaddr=int(ffi.cast("uintptr_t",
+                                                    col_result_r.data)),
+                               nelem=col_result_r.size, dtype=np.int32)
+
+    yield(left, right)
+
+    libgdf.gdf_column_free(col_result_l)
+    libgdf.gdf_column_free(col_result_r)
 
 
 def apply_prefixsum(col_inp, col_out, inclusive):
@@ -313,3 +332,20 @@ class SegmentedRadixortPlan(object):
                                                    segsize,
                                                    unwrap_devary(d_begins[s:]),
                                                    unwrap_devary(d_ends[s:]))
+
+
+def hash_columns(columns, result):
+    """Hash the *columns* and store in *result*.
+    Returns *result*
+    """
+    assert len(columns) > 0
+    assert result.dtype == np.int32
+    # No-op for 0-sized
+    if len(result) == 0:
+        return result
+    col_input = [col.cffi_view for col in columns]
+    col_out = result.cffi_view
+    ncols = len(col_input)
+    hashfn = libgdf.GDF_HASH_MURMUR3
+    libgdf.gdf_hash(ncols, col_input, hashfn, col_out)
+    return result
